@@ -4,7 +4,7 @@ CloudMesh is a Kubernetes-aware networking platform written in Go. It combines d
 
 I started with a small load-balancing prototype and extended the project to explore how a Kubernetes control plane can manage networking infrastructure automatically. My goal was to understand the software behind cloud networking: how endpoints are discovered, how traffic is distributed, how desired state is reconciled, and how the system recovers when resources change or fail.
 
-The core software and custom controller have been validated on my Apple Silicon Mac using Docker Desktop and a local two-node kind Kubernetes cluster. No paid cloud infrastructure is needed for the demonstrations below.
+The core software and custom controller have been validated on my Apple Silicon Mac using Docker Desktop and a local two-node kind Kubernetes cluster. The standalone Linux agent was subsequently tested in a disposable Docker container. No paid cloud infrastructure is needed for the demonstrations below.
 
 ## Contents
 
@@ -17,6 +17,7 @@ The core software and custom controller have been validated on my Apple Silicon 
 - [Testing and coverage](#testing-and-coverage)
 - [Performance benchmarking](#performance-benchmarking)
 - [Detailed results and evidence](docs/results.md)
+- [Linux network agent](#linux-network-agent)
 - [Linux networking lab](#linux-networking-lab)
 - [Troubleshooting](#troubleshooting)
 - [Limitations and next steps](#limitations-and-next-steps)
@@ -34,6 +35,7 @@ The core software and custom controller have been validated on my Apple Silicon 
 | Custom controller | Managed Deployment/Service creation, updates, status, ownership and periodic reconciliation | Live rollout, scaling, drift repair and cleanup passed |
 | IPv4/IPv6 IPAM | Bounded address allocator with synchronized ownership tracking | Go tests passed |
 | Observability | Prometheus-format counters, health and readiness endpoints | Local demo emitted metrics |
+| Linux network agent | Declarative kernel-state reconciliation, VXLAN, dual-stack IPAM, firewall and IPv4 DNAT | Live demo passed (author-confirmed; transcript pending) |
 | Linux networking lab | Go-generated namespace, veth, VXLAN, firewall and DNAT commands | Command-plan tests passed; privileged execution pending |
 | Container deployment | Multi-stage Docker images and Kubernetes manifests | Both application and controller images built and deployed |
 | CI | GitHub Actions workflow for Go tests and smoke demo | Workflow supplied; hosted CI status not recorded here |
@@ -44,16 +46,18 @@ The core software and custom controller have been validated on my Apple Silicon 
 
 ![CloudMesh control-plane and data-plane architecture](docs/assets/architecture.svg)
 
-*Figure 1. Implemented architecture: a separate controller manages proxy resources; the proxy discovers and forwards to backend pods.*
+*Figure 1. Implemented architecture: Kubernetes controller/proxy and standalone Linux agent are independent subsystems.*
 
-CloudMesh has two distinct software responsibilities:
+![Detailed Kubernetes architecture](docs/assets/kubernetes-architecture.svg)
+
+The Kubernetes subsystem has two distinct software responsibilities:
 
 - **Control plane:** the custom Go controller reads declarative `CloudMeshNetwork` resources from Kubernetes and creates or updates the corresponding proxy Deployment and Service. It also reports resource status.
 - **Data plane:** each CloudMesh proxy discovers ready backend IPs from EndpointSlices, keeps its own synchronized backend pool and forwards TCP or HTTP traffic to a selected endpoint.
 
 The proxy and the custom controller run in separate processes. Within each proxy, discovery and forwarding share an in-memory backend pool. Each replica maintains its own scheduling counters and backend health state; replicas do not share global connection counts.
 
-The Linux networking lab is a separate executable for exploring network virtualization. It is not a custom Kubernetes CNI and is not managed by the custom controller in the current version.
+The Linux network agent and original one-shot netlab are separate executables for exploring network virtualization. It is not a custom Kubernetes CNI and is not managed by the custom controller in the current version.
 
 ### How reconciliation works
 
@@ -73,10 +77,12 @@ This implementation intentionally uses the Go standard library and the Kubernete
 cloudmesh/
 ├── cmd/
 │   ├── cloudmesh/             # TCP/HTTP proxy executable
+│   ├── agent/                 # Linux network reconciliation executable
 │   ├── controller/            # Custom Kubernetes controller executable
 │   ├── echo/                  # Demo backend returning its identity
 │   └── netlab/                # Linux networking lab executable
 ├── internal/
+│   ├── agent/                 # Desired state, Linux operations, tests
 │   ├── controller/
 │   │   ├── types.go           # Custom resource types and validation
 │   │   ├── api.go             # Kubernetes REST API operations
@@ -92,15 +98,18 @@ cloudmesh/
 │   ├── kubernetes/            # kind config and base workloads
 │   └── controller/            # CRD, controller Deployment and RBAC
 ├── examples/
-│   └── application-network.yaml
+│   ├── application-network.yaml
+│   └── linux-network.json
 ├── scripts/
 │   ├── demo.sh                # Local traffic and failover demonstration
 │   ├── kube-demo.sh           # Original Kubernetes proxy demo
+│   ├── agent-demo.sh          # Privileged disposable Linux integration tests
 │   ├── controller-demo.sh     # Custom controller deployment
 │   └── benchmark.py          # HTTP workload and latency measurement
 ├── docs/                      # Design, verification and networking lab notes
 ├── .github/workflows/          # CI configuration
 ├── Dockerfile                 # Proxy and echo container image
+├── Dockerfile.agent           # Linux agent and networking tools
 ├── Dockerfile.controller      # Controller container image
 ├── Makefile                   # Build, test and demo targets
 └── go.mod
@@ -646,6 +655,59 @@ Initial sample results from the original Linux development environment are store
 
 These results are from one initial experiment, not my laptop and not evidence of a throughput or latency improvement. For a fair overhead comparison, configure the proxy with the same backend capacity as the direct baseline, hold workload parameters constant, perform warm-up, repeat trials and record system configuration. Repeated benchmarking, failover timing and concurrent scheduler comparisons remain future work.
 
+## Linux network agent
+
+The standalone Go agent extends the one-shot `netlab` component with continuous desired-state reconciliation. It uses the netlink-backed `ip` utility, `iptables` and `ip6tables` to inspect and configure kernel networking inside two Linux network namespaces. The existing IPAM allocator supplies deterministic IPv4 and IPv6 overlay addresses. The Kubernetes controller does not configure this agent yet.
+
+![Linux agent topology](docs/assets/linux-agent-topology.svg)
+
+The namespaces represent two simulated sites on one Linux VM; the veth pair provides an IPv4 underlay and VXLAN (VNI 44, UDP 4789) transports Ethernet frames containing IPv4 or IPv6 packets. This is not a multi-host or public-cloud deployment.
+
+![Linux agent reconciliation](docs/assets/agent-reconciliation.svg)
+
+The agent reads `examples/linux-network.json` (VNI 44 and allowed TCP port 8081), validates the configuration, inspects existing interfaces and rules, and applies only required mutations. It retries on a subsequent pass if an operation fails. In continuous mode the demo uses a two-second reconciliation interval; that is a configuration value, not a measured recovery time.
+
+![Kernel packet path](docs/assets/packet-flow.svg)
+
+The IPv4 VIP `10.44.0.100:8081` maps to `10.44.0.2:8081` using OUTPUT DNAT. The stateful overlay INPUT filter first accepts established/related TCP flows, then the allowed port, then drops other incoming overlay TCP traffic. ICMP is not restricted by this TCP-only policy. The VIP is a single-backend mapping, not a kernel load balancer.
+
+### Run the agent
+
+```bash
+# Test the Go logic without kernel privileges.
+gofmt -w cmd/agent/ internal/agent/
+go test -v ./internal/agent/
+go test -race ./internal/agent/
+go test -cover ./internal/agent/
+make test
+make demo
+
+# Check Docker and run the isolated kernel integration tests.
+docker info
+docker run --rm hello-world
+bash scripts/agent-demo.sh
+```
+
+`gofmt` normalizes the source formatting; the Go tests check configuration, reconciliation and simulated kernel operations. `make test` runs repository-wide race tests and `go vet`; `make demo` checks the original load balancer. The agent script builds the image, provisions the lab, executes assertions and removes only its own temporary container. It uses a privileged container with `--network none`, no host mounts or Docker socket. Privileged containers have broad Linux VM capabilities; use only trusted code in a disposable development environment.
+
+### Live validation
+
+I completed the Linux agent tests after the DNAT troubleshooting step. The pass status below is my confirmation of the test run; the final successful terminal transcript is not yet included here. The assertions are taken from `scripts/agent-demo.sh`, not reconstructed terminal output. No packet counts, recovery times or post-fix coverage percentages are inferred.
+
+| Experiment | Outcome reported after correction |
+| --- | --- |
+| Initial reconciliation | Passed — namespaces, links, addresses, filter chains and DNAT |
+| Second reconciliation | Passed — zero-mutation assertion |
+| Dual-stack VXLAN | Passed — IPv4 and IPv6 ping and HTTP |
+| IPv4 virtual service | Passed — VIP reaches remote echo backend |
+| Stateful firewall | Passed — live TCP port 8082 blocked over both families |
+| Interface recovery | Passed — deleted VXLAN recreated and IPv4/IPv6 HTTP restored |
+| Dynamic policy | Passed — port 8082 allowed and new connections to 8081 blocked, without agent restart |
+
+![VXLAN recovery experiment](docs/assets/agent-recovery.svg)
+
+The initial development-environment test run reported 82.0% agent statement coverage and seven internal packages passed race tests. This is separate from the recorded macOS controller coverage of 80.4%; see [results](docs/results.md) for evidence and troubleshooting. See [Linux agent design](docs/linux-agent.md) for manual inspection commands and limitations.
+
 ## Linux networking lab
 
 The independent netlab component generates commands for Linux network namespaces, veth interfaces, VXLAN overlays, dual-stack IPAM, packet filtering and IPv4 DNAT. A firewall return-traffic correction is included in the branch baseline; the Go netlab tests passed. Real kernel execution is separate from testing the generated command plan.
@@ -657,7 +719,7 @@ make build
 
 This prints the intended networking operations. Run privileged networking experiments only inside a disposable Linux VM and follow [the Linux lab instructions](docs/linux-lab.md). The project does not modify the macOS host's firewall as part of the normal demo.
 
-IPv6 traffic forwarding, VXLAN connectivity, live iptables/NAT behavior and pod-to-VM connectivity were not independently validated in this macOS controller session. BGP and real cloud VPC integration are not implemented.
+The original command-plan executable remains separate from the live agent demo. The latter validates Linux overlay traffic and firewall/NAT behavior, not Kubernetes pod-to-VM or actual cloud connectivity.
 
 ## Troubleshooting
 
@@ -734,15 +796,34 @@ kubectl --context kind-cloudmesh-controller -n cloudmesh \
 
 The current controller repairs supported child-resource drift on periodic relisting; it does not directly watch every child. A Service can temporarily return `NotFound` after deletion. Inspect the controller logs, check the custom resource's desired/observed generations and allow time for reconciliation.
 
+### DNAT rule rejected during the first Linux agent run
+
+The first privileged run reached 26 successful mutations, but the DNAT operation failed. Both namespaces and VXLAN devices were already present and up. The actual error was:
+
+```text
+reconcile partial_changes=26
+reconcile error: virtual service DNAT: ... iptables-restore ...
+Need TCP, UDP, SCTP or DCCP with port specification
+```
+
+The generated rule translated a destination including a TCP port, but did not specify the transport protocol in the DNAT rule itself. A TCP match on the parent chain is not sufficient for this rule to be accepted. The correction in `internal/agent/agent.go` is to include the explicit protocol; the regression-test expectations in `internal/agent/agent_test.go` should match it.
+
+```diff
+- -A CMA-DNAT -j DNAT --to-destination 10.44.0.2:8081
++ -A CMA-DNAT -p tcp -j DNAT --to-destination 10.44.0.2:8081
+```
+
+The successful rerun was confirmed after this troubleshooting step. The earlier mock tests did not exercise the real `iptables-restore` parser, which is why the error only became visible during integration testing. The initial partial mutation count is not the mutation count of the successful run.
+
 ## Limitations and next steps
 
 CloudMesh is a learning-oriented infrastructure software prototype for trusted local environments. It is not a production Kubernetes CNI, a replacement for kube-proxy, or a deployed multi-cloud networking product.
 
 The following are intentionally outside the current verified scope:
 
-- Live dual-stack end-to-end traffic tests and in-cluster DNS validation. The cluster was configured for dual stack, but the demonstrated requests used IPv4 localhost. Static backend hostnames can be resolved by Go; CloudMesh is not a DNS server.
+- Live dual-stack end-to-end Kubernetes traffic tests and in-cluster DNS validation. The cluster was configured for dual stack, but the demonstrated requests used IPv4 localhost. Static backend hostnames can be resolved by Go; CloudMesh is not a DNS server.
 - Backend scaling/failure tests in Kubernetes under traffic; the local two-backend demo establishes basic failover, not cluster-wide failover behavior.
-- Integrated Linux network agent, live VXLAN/firewall validation, BGP route management and actual GCP connectivity.
+- Integration between the standalone Linux agent and Kubernetes controller, multi-host overlay networking, BGP route management and actual GCP connectivity.
 - Application-level HTTP health checks, connection limits, graceful backend draining and persisted IPAM allocations.
 - High availability, leader election, parallel reconciliation workers, direct child-resource watches and a globally coordinated backend scheduler.
 - Authentication/TLS termination on the forwarding plane, production multi-tenant isolation and large-scale performance evaluation.
@@ -751,7 +832,7 @@ The controller's `Ready` phase indicates desired proxy replica availability for 
 
 ## Development notes and references
 
-The initial implementation and controller extension were developed with AI assistance. I have personally run the tests, deployed the system on my Mac, diagnosed the local Docker/kubelet failures, validated the controller's live behavior and pushed the controller feature branch. The results above distinguish those executions from the original sample benchmark. The next improvements will be documented with their own tests and measurements.
+The initial implementation, controller extension and Linux agent were developed with AI assistance. I have personally run the tests, deployed the system on my Mac, diagnosed the local Docker/kubelet failures, validated the controller's live behavior and pushed the controller feature branch. The results above distinguish those executions from the original sample benchmark. The next improvements will be documented with their own tests and measurements.
 
 Additional documentation:
 
@@ -760,6 +841,7 @@ Additional documentation:
 - [Software design](docs/design.md)
 - [Custom controller design and API](docs/custom-controller.md)
 - [Original verification notes](docs/verification.md) — historical baseline; this README records the newer macOS/live controller results.
+- [Linux network agent](docs/linux-agent.md)
 - [Linux networking lab](docs/linux-lab.md)
 - [BGP extension plan](docs/bgp-extension.md)
 

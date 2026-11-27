@@ -1,0 +1,7 @@
+digraph G {
+graph [bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.40", labelloc=t, fontname="DejaVu Sans Bold", fontsize=19, fontcolor="#183047"]; node [shape=box, style="rounded,filled", fillcolor="#F1F6FA", color="#A9BAC8", fontname="DejaVu Sans", fontsize=12, fontcolor="#183047", margin="0.19,0.13"]; edge [color="#5D7184", fontname="DejaVu Sans", fontsize=10, fontcolor="#5D7184", arrowsize=.75];
+ graph [label="Linux agent | interface drift recovery"];
+
+ graph [rankdir=LR]; a [label="Healthy overlay\nIPv4 + IPv6"]; b [label="Delete Site A\ncma-vxlan",fillcolor="#FCE8DB"]; c [label="Start reconciliation\nDetect missing link"]; d [label="Recreate VXLAN\nRestore addresses / link state"]; e [label="Verify HTTP again\nIPv4 + IPv6",fillcolor="#E2F4F1"]; a -> b -> c -> d -> e;
+
+}

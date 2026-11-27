@@ -2,9 +2,11 @@
 
 The agent extends the existing one-shot `netlab` experiment with a desired-state reconciliation loop. The goal is to learn how infrastructure software inspects and configures a Linux network, detects drift, and restores the expected state. It reuses CloudMesh's existing dual-stack IPAM allocator. It is a standalone lab component; the Kubernetes `CloudMeshNetwork` controller does not yet configure it.
 
-The initial agent implementation was prepared with AI assistance. The unit-test evidence included here is from the development sandbox, not the laptop deployment. The live demo below is designed to produce an independent validation record.
+The initial agent implementation was prepared with AI assistance. The unit-test evidence included here is from the development sandbox, not the laptop deployment. I subsequently confirmed the live demo passed after fixing the DNAT rule. The successful transcript is not yet attached; see [results](results.md#8-linux-network-agent-validation).
 
 ## Architecture
+
+![Linux agent topology](assets/linux-agent-topology.svg)
 
 ```mermaid
 flowchart TD
@@ -30,9 +32,13 @@ Both sites live in a disposable privileged Linux container on Docker Desktop's L
 | Overlay IPv6 | `fd44:44::1/64` | `fd44:44::2/64` |
 | IPv4 virtual service | `10.44.0.100:8081` | DNAT destination `10.44.0.2:8081` |
 
+![Packet flow](assets/packet-flow.svg)
+
 The filter chain allows established/related TCP connections first, accepts new traffic to the configured port, and drops other incoming TCP traffic on the VXLAN interface. ICMP and other protocols are not restricted by this demonstration policy. The stateful rule is essential: replies to a client ephemeral port must not be blocked. IPv4 OUTPUT DNAT translates the virtual service address to the remote backend; this is a fixed translation for a single backend, not the existing Go load balancer's scheduling engine.
 
 ## Reconciliation design
+
+![Reconciliation loop](assets/agent-reconciliation.svg)
 
 1. Read the JSON configuration and reject invalid VNI/port values or unknown fields.
 2. Allocate the two sites' IPv4/IPv6 addresses using deterministic IPAM allocation.
@@ -146,7 +152,26 @@ docker rm -f cloudmesh-agent-manual
 
 ## Verification status
 
-The agent's unit/race tests and the original application regression demo passed in the development environment. Agent statement coverage was 82.0%. Go vet passed. Shell syntax was checked and the agent was cross-compiled for Apple Silicon macOS (it intentionally refuses to perform Linux operations on macOS). The execution environment did not provide Docker or sufficient Linux namespace privileges, so the Docker image build and live network tests have **not** been executed there. The `agent-demo.sh` assertions remain to be run on the laptop. Linux kernel feature availability (VXLAN, network namespaces, IPv6, conntrack, NAT and iptables) is an integration requirement.
+The agent's unit/race tests and the original application regression demo passed in the development environment. Agent statement coverage was 82.0%. Go vet passed. Shell syntax was checked and the agent was cross-compiled for Apple Silicon macOS (it intentionally refuses to perform Linux operations on macOS). The execution environment did not provide Docker or sufficient Linux namespace privileges, so the Docker image build and live network tests have **not** been executed there. I subsequently confirmed the laptop test run passed; the final transcript is not attached. Linux kernel feature availability (VXLAN, network namespaces, IPv6, conntrack, NAT and iptables) is an integration requirement.
+
+### DNAT rule rejected during the first Linux agent run
+
+The first privileged run reached 26 successful mutations, but the DNAT operation failed. Both namespaces and VXLAN devices were already present and up. The actual error was:
+
+```text
+reconcile partial_changes=26
+reconcile error: virtual service DNAT: ... iptables-restore ...
+Need TCP, UDP, SCTP or DCCP with port specification
+```
+
+The generated rule translated a destination including a TCP port, but did not specify the transport protocol in the DNAT rule itself. A TCP match on the parent chain is not sufficient for this rule to be accepted. The correction in `internal/agent/agent.go` is to include the explicit protocol; the regression-test expectations in `internal/agent/agent_test.go` should match it.
+
+```diff
+- -A CMA-DNAT -j DNAT --to-destination 10.44.0.2:8081
++ -A CMA-DNAT -p tcp -j DNAT --to-destination 10.44.0.2:8081
+```
+
+The successful rerun was confirmed after this troubleshooting step. The earlier mock tests did not exercise the real `iptables-restore` parser, which is why the error only became visible during integration testing. The initial partial mutation count is not the mutation count of the successful run.
 
 ## Limitations and next steps
 

@@ -1,0 +1,7 @@
+digraph G {
+graph [bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.40", labelloc=t, fontname="DejaVu Sans Bold", fontsize=19, fontcolor="#183047"]; node [shape=box, style="rounded,filled", fillcolor="#F1F6FA", color="#A9BAC8", fontname="DejaVu Sans", fontsize=12, fontcolor="#183047", margin="0.19,0.13"]; edge [color="#5D7184", fontname="DejaVu Sans", fontsize=10, fontcolor="#5D7184", arrowsize=.75];
+ graph [label="Packet path | VXLAN, stateful filtering and DNAT"];
+
+ req [label="Site A: TCP request\n10.44.0.100:8081",fillcolor="#E3EFFD"]; nat [label="IPv4 nat OUTPUT → CMA-DNAT\n-p tcp · destination becomes 10.44.0.2:8081"]; frame [label="VXLAN encapsulation (conceptual)\nOuter Ethernet | outer IPv4 | UDP 4789\nVXLAN VNI 44 | inner Ethernet | inner IP | TCP + payload",fillcolor="#E2F4F1"]; dec [label="Site B: decapsulate on cma-vxlan"]; filter [label="INPUT → CMA-FILTER (overlay TCP)\n1. ESTABLISHED,RELATED → ACCEPT\n2. Configured destination port → ACCEPT\n3. Other TCP → DROP"]; accept [label="Echo backend",fillcolor="#E2F4F1"]; drop [label="Other new TCP traffic blocked",fillcolor="#FCE8DB"]; req -> nat -> frame -> dec -> filter; filter -> accept [label="allowed"]; filter -> drop [label="denied"]; {rank=same;accept;drop}
+
+}

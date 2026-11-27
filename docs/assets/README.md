@@ -1,3 +1,3 @@
 # Figures
 
-These are explanatory diagrams and plots from recorded results, not screenshots of a running cluster. The `.dot` files are editable Graphviz sources for the three conceptual diagrams. To regenerate one: `dot -Tsvg architecture.dot -o architecture.svg`. Numerical plots are based on the counts in `../results.md` and the original JSON benchmarks.
+The SVGs are explanatory diagrams and plots, not screenshots of successful runs. The Graphviz `.dot` files are editable sources; regenerate using `dot -Tsvg architecture.dot -o architecture.svg`. The original Kubernetes architecture remains available as `kubernetes-architecture.svg`. The new figures describe the independent Linux agent, its topology, packet path, reconciliation and interface recovery. The numerical plots remain based on earlier recorded counts and original JSON benchmarks, not the final agent run.

@@ -1,0 +1,9 @@
+digraph G {
+graph [bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.40", labelloc=t, fontname="DejaVu Sans Bold", fontsize=19, fontcolor="#183047"]; node [shape=box, style="rounded,filled", fillcolor="#F1F6FA", color="#A9BAC8", fontname="DejaVu Sans", fontsize=12, fontcolor="#183047", margin="0.19,0.13"]; edge [color="#5D7184", fontname="DejaVu Sans", fontsize=10, fontcolor="#5D7184", arrowsize=.75];
+ graph [label="Linux agent | two-site overlay topology"];
+
+ graph [rankdir=LR]; subgraph cluster_a {label="Site A · cma-site-a";color="#9FBFDF";style=rounded; client [label="Client / curl\nVIP 10.44.0.100:8081"]; va [label="cma-vxlan\n10.44.0.1/24\nfd44:44::1/64",fillcolor="#E2F4F1"]; ua [label="cma-under-a\n192.0.2.1/30"]; client -> va [label="OUTPUT DNAT"]; va -> ua [label="encapsulate"]; }
+ subgraph cluster_b {label="Site B · cma-site-b";color="#9FBFDF";style=rounded; ub [label="cma-under-b\n192.0.2.2/30"]; vb [label="cma-vxlan\n10.44.0.2/24\nfd44:44::2/64",fillcolor="#E2F4F1"]; server [label="Stateful INPUT filter\nEcho :8081 / :8082"]; ub -> vb [label="decapsulate"]; vb -> server; }
+ ua -> ub [dir=both,label="veth • IPv4 underlay\nUDP 4789 / VNI 44"]; va -> vb [dir=both,style=dashed,color="#13948A",label="logical L2 overlay",constraint=false];
+
+}

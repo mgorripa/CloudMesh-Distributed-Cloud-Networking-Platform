@@ -1,6 +1,6 @@
 # CloudMesh — Verification and Results
 
-This document records the tests I ran on my Mac on November 26, 2026, along with a clearly identified historical Linux benchmark. It is a reproducibility record, not a production performance or availability claim. The initial implementation and controller extension were developed with AI assistance; the macOS deployment, debugging and test runs below are my recorded validation work.
+This document records the tests I ran on my Mac on November 26, 2026, along with a clearly identified historical Linux benchmark. It is a reproducibility record, not a production performance or availability claim. The initial implementation, controller extension and Linux agent were developed with AI assistance; the macOS deployment, debugging and test runs below are my recorded validation work.
 
 [Back to project README](../README.md) · [Controller design](custom-controller.md) · [Original verification notes](verification.md)
 
@@ -33,6 +33,8 @@ This document records the tests I ran on my Mac on November 26, 2026, along with
 | Service recovery | Deleted Service recreated |
 | Invalid configuration | Rejected by CRD schema |
 | Owner cleanup | Deployment and Service deletion waits completed |
+| Linux agent | Live demo passed (author-confirmed; transcript pending) |
+| Agent statement coverage | 82.0% in initial development environment (pre-fix) |
 
 ## 2. Automated tests and coverage
 
@@ -436,22 +438,93 @@ kubectl --context kind-cloudmesh-controller -n cloudmesh \
 
 The current controller repairs supported child-resource drift on periodic relisting; it does not directly watch every child. A Service can temporarily return `NotFound` after deletion. Inspect the controller logs, check the custom resource's desired/observed generations and allow time for reconciliation.
 
-## 8. What is not yet verified
+## 8. Linux network agent validation
+
+I completed the Linux agent tests after the DNAT troubleshooting step. The pass status below is my confirmation of the test run; the final successful terminal transcript is not yet included here. The assertions are taken from `scripts/agent-demo.sh`, not reconstructed terminal output. No packet counts, recovery times or post-fix coverage percentages are inferred.
+
+| Experiment | Outcome reported after correction |
+| --- | --- |
+| Initial reconciliation | Passed — namespaces, links, addresses, filter chains and DNAT |
+| Second reconciliation | Passed — zero-mutation assertion |
+| Dual-stack VXLAN | Passed — IPv4 and IPv6 ping and HTTP |
+| IPv4 virtual service | Passed — VIP reaches remote echo backend |
+| Stateful firewall | Passed — live TCP port 8082 blocked over both families |
+| Interface recovery | Passed — deleted VXLAN recreated and IPv4/IPv6 HTTP restored |
+| Dynamic policy | Passed — port 8082 allowed and new connections to 8081 blocked, without agent restart |
+
+![Linux agent topology](assets/linux-agent-topology.svg)
+
+```bash
+# Test the Go logic without kernel privileges.
+gofmt -w cmd/agent/ internal/agent/
+go test -v ./internal/agent/
+go test -race ./internal/agent/
+go test -cover ./internal/agent/
+make test
+make demo
+
+# Check Docker and run the isolated kernel integration tests.
+docker info
+docker run --rm hello-world
+bash scripts/agent-demo.sh
+```
+
+`gofmt` normalizes the source formatting; the Go tests check configuration, reconciliation and simulated kernel operations. `make test` runs repository-wide race tests and `go vet`; `make demo` checks the original load balancer. The agent script builds the image, provisions the lab, executes assertions and removes only its own temporary container. It uses a privileged container with `--network none`, no host mounts or Docker socket. Privileged containers have broad Linux VM capabilities; use only trusted code in a disposable development environment.
+
+Initial development-environment results: [unit test transcript](results/agent-unit-tests.txt) records all seven internal Go packages passing race tests and 82.0% agent statement coverage; [regression demo](results/agent-regression-demo.txt) records the original proxy smoke test. These are pre-fix results, not a new macOS coverage measurement.
+
+![Recovery sequence](assets/agent-recovery.svg)
+
+### DNAT rule rejected during the first Linux agent run
+
+The first privileged run reached 26 successful mutations, but the DNAT operation failed. Both namespaces and VXLAN devices were already present and up. The actual error was:
+
+```text
+reconcile partial_changes=26
+reconcile error: virtual service DNAT: ... iptables-restore ...
+Need TCP, UDP, SCTP or DCCP with port specification
+```
+
+The generated rule translated a destination including a TCP port, but did not specify the transport protocol in the DNAT rule itself. A TCP match on the parent chain is not sufficient for this rule to be accepted. The correction in `internal/agent/agent.go` is to include the explicit protocol; the regression-test expectations in `internal/agent/agent_test.go` should match it.
+
+```diff
+- -A CMA-DNAT -j DNAT --to-destination 10.44.0.2:8081
++ -A CMA-DNAT -p tcp -j DNAT --to-destination 10.44.0.2:8081
+```
+
+The successful rerun was confirmed after this troubleshooting step. The earlier mock tests did not exercise the real `iptables-restore` parser, which is why the error only became visible during integration testing. The initial partial mutation count is not the mutation count of the successful run.
+
+### Preserve the successful transcript
+
+If the log was not saved, rerun in the trusted disposable environment:
+
+```bash
+set -o pipefail
+bash scripts/agent-demo.sh 2>&1 | tee /tmp/cloudmesh-agent-demo.log
+```
+
+After a successful exit, review the log and save it if appropriate:
+
+```bash
+cp /tmp/cloudmesh-agent-demo.log docs/results/linux-agent-macos.txt
+```
+
+## 9. What is not yet verified
 
 CloudMesh is a learning-oriented infrastructure software prototype for trusted local environments. It is not a production Kubernetes CNI, a replacement for kube-proxy, or a deployed multi-cloud networking product.
 
 The following are intentionally outside the current verified scope:
 
-- Live dual-stack end-to-end traffic tests and in-cluster DNS validation. The cluster was configured for dual stack, but the demonstrated requests used IPv4 localhost. Static backend hostnames can be resolved by Go; CloudMesh is not a DNS server.
+- Live dual-stack end-to-end Kubernetes traffic tests and in-cluster DNS validation. The cluster was configured for dual stack, but the demonstrated requests used IPv4 localhost. Static backend hostnames can be resolved by Go; CloudMesh is not a DNS server.
 - Backend scaling/failure tests in Kubernetes under traffic; the local two-backend demo establishes basic failover, not cluster-wide failover behavior.
-- Integrated Linux network agent, live VXLAN/firewall validation, BGP route management and actual GCP connectivity.
+- Integration between the Linux agent and Kubernetes controller, actual multi-host overlays, BGP route management and actual GCP connectivity.
 - Application-level HTTP health checks, connection limits, graceful backend draining and persisted IPAM allocations.
 - High availability, leader election, parallel reconciliation workers, direct child-resource watches and a globally coordinated backend scheduler.
 - Authentication/TLS termination on the forwarding plane, production multi-tenant isolation and large-scale performance evaluation.
 
 The controller's `Ready` phase indicates desired proxy replica availability for the observed Deployment state; it is not a guarantee of every backend's reachability. The current retry and health mechanisms of the original proxy are distinct from the custom controller's retry logic.
 
-## 9. Cleanup
+## 10. Cleanup
 
 ```bash
 kind delete cluster --name cloudmesh-controller
