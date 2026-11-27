@@ -1,0 +1,13 @@
+apiVersion: networking.cloudmesh.io/v1alpha1
+kind: CloudMeshNetwork
+metadata:
+  name: application-network
+  namespace: cloudmesh
+spec:
+  serviceRef:
+    name: echo
+    portName: http
+  loadBalancing:
+    algorithm: round-robin
+  replicas: 1
+  probeIntervalSeconds: 2

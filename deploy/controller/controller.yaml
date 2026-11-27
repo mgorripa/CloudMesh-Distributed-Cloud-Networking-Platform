@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudmesh-controller
+  namespace: cloudmesh
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudmesh-controller
+  namespace: cloudmesh
+rules:
+- apiGroups: [networking.cloudmesh.io]
+  resources: [cloudmeshnetworks]
+  verbs: [get, list, watch]
+- apiGroups: [networking.cloudmesh.io]
+  resources: [cloudmeshnetworks/status]
+  verbs: [patch]
+- apiGroups: [apps]
+  resources: [deployments]
+  verbs: [get, create, patch]
+- apiGroups: ['']
+  resources: [services]
+  verbs: [get, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudmesh-controller
+  namespace: cloudmesh
+subjects:
+- kind: ServiceAccount
+  name: cloudmesh-controller
+  namespace: cloudmesh
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudmesh-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudmesh-controller
+  namespace: cloudmesh
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: cloudmesh-controller}
+  template:
+    metadata:
+      labels: {app: cloudmesh-controller}
+    spec:
+      serviceAccountName: cloudmesh-controller
+      containers:
+      - name: controller
+        image: cloudmesh-controller:local
+        imagePullPolicy: Never
+        args: ['-proxy-image=cloudmesh:local']
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities: {drop: [ALL]}
+        resources:
+          requests: {cpu: 25m, memory: 32Mi}
+          limits: {memory: 128Mi}
