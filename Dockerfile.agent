@@ -1,0 +1,16 @@
+FROM golang:1.23 AS build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 go build -trimpath -o /out/agent ./cmd/agent && \
+    CGO_ENABLED=0 go build -trimpath -o /out/echo ./cmd/echo
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iproute2 iptables iputils-ping curl ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/agent /agent
+COPY --from=build /out/echo /echo
+COPY examples/linux-network.json /etc/cloudmesh/network.json
+ENV CLOUDMESH_ISOLATED_LAB=1
+ENTRYPOINT ["/agent"]

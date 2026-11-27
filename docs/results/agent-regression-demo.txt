@@ -1,0 +1,36 @@
+mkdir -p bin
+go build -o bin/cloudmesh ./cmd/cloudmesh
+go build -o bin/echo ./cmd/echo
+go build -o bin/netlab ./cmd/netlab
+bash scripts/demo.sh
+HTTP distribution:
+{"backend":"alpha","method":"GET","path":"/api"}
+{"backend":"beta","method":"GET","path":"/api"}
+{"backend":"alpha","method":"GET","path":"/api"}
+{"backend":"beta","method":"GET","path":"/api"}
+{"backend":"alpha","method":"GET","path":"/api"}
+{"backend":"beta","method":"GET","path":"/api"}
+Raw TCP forwarding (HTTP carried through TCP):
+{"backend":"alpha","method":"GET","path":"/api"}
+After backend alpha stops:
+{"backend":"beta","method":"GET","path":"/api"}
+{"backend":"beta","method":"GET","path":"/api"}
+{"backend":"beta","method":"GET","path":"/api"}
+{"backend":"beta","method":"GET","path":"/api"}
+{"backend":"beta","method":"GET","path":"/api"}
+Metrics:
+# TYPE cloudmesh_http_requests_total counter
+cloudmesh_http_requests_total 11
+# TYPE cloudmesh_tcp_connections_total counter
+cloudmesh_tcp_connections_total 1
+# TYPE cloudmesh_proxy_errors_total counter
+cloudmesh_proxy_errors_total 0
+# TYPE cloudmesh_active_tcp gauge
+cloudmesh_active_tcp 0
+# TYPE cloudmesh_ready_backends gauge
+cloudmesh_ready_backends 1
+# TYPE cloudmesh_reconciliations_total counter
+cloudmesh_reconciliations_total 1
+# TYPE cloudmesh_discovery_errors_total counter
+cloudmesh_discovery_errors_total 0
+PASS: distribution, TCP forwarding, backend failover

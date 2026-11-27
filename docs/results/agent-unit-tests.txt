@@ -1,0 +1,14 @@
+go version go1.23.2 linux/amd64
+?   	cloudmesh/cmd/agent	[no test files]
+?   	cloudmesh/cmd/cloudmesh	[no test files]
+?   	cloudmesh/cmd/controller	[no test files]
+?   	cloudmesh/cmd/echo	[no test files]
+?   	cloudmesh/cmd/netlab	[no test files]
+ok  	cloudmesh/internal/agent	1.059s
+ok  	cloudmesh/internal/controller	1.100s
+ok  	cloudmesh/internal/discovery	1.025s
+ok  	cloudmesh/internal/ipam	1.019s
+ok  	cloudmesh/internal/netlab	1.024s
+ok  	cloudmesh/internal/pool	1.023s
+ok  	cloudmesh/internal/proxy	1.031s
+ok  	cloudmesh/internal/agent	0.010s	coverage: 82.0% of statements
