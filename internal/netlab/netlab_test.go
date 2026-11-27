@@ -24,3 +24,34 @@ func TestPlan(t *testing.T) {
 		}
 	}
 }
+func TestFirewallRuleOrder(t *testing.T) {
+	for _, firewall := range []string{
+		"iptables", "ip6tables",
+	} {
+		t.Run(firewall, func(t *testing.T) {
+			rules := firewallRules(A, firewall)
+
+			if len(rules) != 3 {
+				t.Fatalf("expected 3 rules, got %d", len(rules))
+			}
+
+			if !strings.Contains(
+				rules[0].String(), "ESTABLISHED,RELATED",
+			) {
+				t.Fatal("established traffic must be allowed first")
+			}
+
+			if !strings.Contains(
+				rules[1].String(), "--dport 8081",
+			) {
+				t.Fatal("application port must be allowed")
+			}
+
+			if !strings.HasSuffix(
+				rules[2].String(), "-j DROP",
+			) {
+				t.Fatal("drop rule must come last")
+			}
+		})
+	}
+}
