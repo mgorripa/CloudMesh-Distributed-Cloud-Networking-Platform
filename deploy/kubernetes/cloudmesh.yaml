@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloudmesh
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudmesh
+  namespace: cloudmesh
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudmesh-discovery
+  namespace: cloudmesh
+rules:
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudmesh-discovery
+  namespace: cloudmesh
+subjects:
+- kind: ServiceAccount
+  name: cloudmesh
+  namespace: cloudmesh
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudmesh-discovery
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+  namespace: cloudmesh
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: echo}
+  template:
+    metadata:
+      labels: {app: echo}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: echo
+        image: cloudmesh:local
+        imagePullPolicy: Never
+        command: ["/echo"]
+        ports:
+        - {name: http, containerPort: 8081}
+        readinessProbe:
+          httpGet: {path: /, port: http}
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits: {memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: cloudmesh
+spec:
+  ipFamilyPolicy: PreferDualStack
+  selector: {app: echo}
+  ports:
+  - {name: http, port: 80, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudmesh
+  namespace: cloudmesh
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: cloudmesh}
+  template:
+    metadata:
+      labels: {app: cloudmesh}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: cloudmesh
+      containers:
+      - name: cloudmesh
+        image: cloudmesh:local
+        imagePullPolicy: Never
+        args: ["-service=echo", "-port-name=http", "-admin=:9090", "-algorithm=round-robin"]
+        ports:
+        - {name: http, containerPort: 8080}
+        - {name: tcp, containerPort: 9000}
+        - {name: admin, containerPort: 9090}
+        readinessProbe:
+          httpGet: {path: /readyz, port: admin}
+        livenessProbe:
+          httpGet: {path: /healthz, port: admin}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: ["ALL"]}
+        resources:
+          requests: {cpu: 25m, memory: 32Mi}
+          limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudmesh
+  namespace: cloudmesh
+spec:
+  ipFamilyPolicy: PreferDualStack
+  selector: {app: cloudmesh}
+  ports:
+  - {name: http, port: 8080, targetPort: http}
+  - {name: tcp, port: 9000, targetPort: tcp}
